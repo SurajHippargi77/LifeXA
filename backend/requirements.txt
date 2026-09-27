@@ -4,3 +4,7 @@ python-dotenv
 sqlalchemy
 psycopg2-binary
 pydantic
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt<4.1
+google-generativeai
