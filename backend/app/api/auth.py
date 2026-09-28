@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import OAuth2PasswordBearer
 from jose import jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel
@@ -17,6 +18,27 @@ router = APIRouter()
 password_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
+
+
+def get_current_user(token: str = Depends(oauth2_scheme)) -> str:
+    secret_key = os.getenv("JWT_SECRET_KEY")
+    if not secret_key:
+        raise HTTPException(status_code=500, detail="JWT_SECRET_KEY is not configured")
+
+    try:
+        payload = jwt.decode(token, secret_key, algorithms=[JWT_ALGORITHM])
+        user_id = payload.get("sub")
+        if not user_id:
+            raise ValueError("Token does not contain a user id")
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from exc
+
+    return user_id
 
 
 class AuthRequest(BaseModel):
