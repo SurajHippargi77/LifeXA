@@ -1,4 +1,5 @@
 import os
+import secrets
 from datetime import datetime, timedelta, timezone
 
 from dotenv import load_dotenv
@@ -10,7 +11,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.database.db import get_db
+from app.models.verification_code import VerificationCode
 from app.models.user import User
+from app.services.email_service import send_verification_email
 
 load_dotenv()
 
@@ -52,6 +55,31 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class VerifyEmailRequest(BaseModel):
+    email: str
+    code: str
+
+
+class ResendVerificationRequest(BaseModel):
+    email: str
+
+
+def create_verification_code(db: Session, user: User) -> str:
+    db.query(VerificationCode).filter(VerificationCode.user_id == user.id).delete(
+        synchronize_session=False
+    )
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    verification_code = VerificationCode(
+        user_id=user.id,
+        code=code,
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+    )
+    db.add(verification_code)
+    db.commit()
+    send_verification_email(user.email, code)
+    return code
+
+
 @router.post("/signup", status_code=status.HTTP_201_CREATED)
 def signup(request: AuthRequest, db: Session = Depends(get_db)):
     existing_user = db.query(User).filter(User.email == request.email).first()
@@ -66,7 +94,41 @@ def signup(request: AuthRequest, db: Session = Depends(get_db)):
     db.add(user)
     db.commit()
     db.refresh(user)
+    create_verification_code(db, user)
     return {"id": user.id, "email": user.email}
+
+
+@router.post("/verify-email")
+def verify_email(request: VerifyEmailRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == request.email).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid verification code")
+
+    verification_code = (
+        db.query(VerificationCode)
+        .filter(
+            VerificationCode.user_id == user.id,
+            VerificationCode.code == request.code,
+        )
+        .first()
+    )
+    if not verification_code or verification_code.expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or expired verification code")
+
+    user.is_verified = True
+    db.delete(verification_code)
+    db.commit()
+    return {"message": "Email verified successfully"}
+
+
+@router.post("/resend-verification")
+def resend_verification(request: ResendVerificationRequest, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == request.email).first()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    create_verification_code(db, user)
+    return {"message": "Verification code sent"}
 
 
 @router.post("/login")
